@@ -1,7 +1,27 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+}
+
+// Release signing key: from VENTY_* environment variables (GitHub Actions) or keystore.properties
+// in the repo root (local, gitignored). Without either, release builds fall back to the debug key.
+val releaseKey: Map<String, String>? = run {
+    val env = System.getenv()
+    if (!env["VENTY_KEYSTORE_FILE"].isNullOrBlank()) {
+        return@run mapOf(
+            "storeFile" to env.getValue("VENTY_KEYSTORE_FILE"),
+            "storePassword" to env["VENTY_KEYSTORE_PASSWORD"].orEmpty(),
+            "keyAlias" to env["VENTY_KEY_ALIAS"].orEmpty(),
+            "keyPassword" to env["VENTY_KEY_PASSWORD"].orEmpty(),
+        )
+    }
+    val file = rootProject.file("keystore.properties")
+    if (!file.exists()) return@run null
+    val props = Properties().apply { file.inputStream().use { load(it) } }
+    props.stringPropertyNames().associateWith { props.getProperty(it) }
 }
 
 android {
@@ -16,13 +36,23 @@ android {
         versionName = "0.3.2"
     }
 
+    signingConfigs {
+        releaseKey?.let { key ->
+            create("release") {
+                storeFile = rootProject.file(key.getValue("storeFile"))
+                storePassword = key.getValue("storePassword")
+                keyAlias = key.getValue("keyAlias")
+                keyPassword = key.getValue("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Personal-use app: sign release builds with the debug key so they install directly.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 

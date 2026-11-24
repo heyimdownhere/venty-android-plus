@@ -16,3 +16,6 @@
 local.properties
 .kotlin/
 build/
+
+# Release signing (see docs/SIGNING.md)
+keystore.properties
