@@ -36,6 +36,17 @@ The suffix after the space in the name is the serial number, which works as a fa
 | Generic Access service | `00001800-0000-1000-8000-00805f9b34fb` | |
 | Device Name | `00002a00-0000-1000-8000-00805f9b34fb` | read (contains serial) |
 
+**Full layout read from a Venty** (firmware V01.11, 2026-11-27). There is nothing else to find over GATT: no battery service, no firmware or serial in Device Information.
+
+| Service | Characteristic | Properties | Value |
+|---|---|---|---|
+| Generic Attribute `1801` | Service Changed `2a05` | indicate | |
+| Generic Access `1800` | Device Name `2a00` | read, write | `S&B VY` + serial, e.g. `S&B VY8H6MJC` |
+| | Appearance `2a01` | read | `00 00` (none) |
+| | Preferred Connection Parameters `2a04` | read | `18 00 18 00 00 00 64 00`: 30 ms interval, latency 0, 1 s supervision timeout |
+| Device Information `180a` | Manufacturer Name `2a29` | read | `Storz&Bickel` |
+| Qvap `…0000…` | Control `…0001…` | write, write-no-response, notify | |
+
 The UUIDs are the ASCII string `STORZ&BICKEL` packed into the low bytes (`53 54 4f 52 5a 26 42 49 43 4b 45 4c`).
 
 > One library (lorek123/snb-ble) lists the service as `00000001-…`. The official app's `main.js` defines `serviceUuidQvap = "00000000-5354-4f52-5a26-4249434b454c"`, so the service is `…0000…` and only the characteristic is `…0001…`.
@@ -90,11 +101,11 @@ Request packets: the app sends 20-byte zero-filled packets for most commands and
 | 8 | battery | 0–100 % |
 | 9–10 | auto-shutoff countdown | seconds. **The vendor app computes `b9 + b10`, not a u16**; its progress bar treats 120 s as 100 % |
 | 11 | heater mode | 0 off, 1 on, 2 boost, 3 superboost |
-| 12 | (unknown) | |
+| 12 | (unknown) | always `0` so far on a Venty |
 | 13 | charger connected | 0 / 1 |
 | 14 | settings flags | see below |
 | 15 | (settings write mask on writes) | |
-| 16 | settings2 flags | bit 0 = BLE permanent (only when length ≥ 17) |
+| 16 | settings2 flags | bit 0 = BLE permanent (only when length ≥ 17). **A Venty on V01.11 sends 16-byte status packets**, so it has no settings2 byte |
 | 17 | (settings2 write mask on writes) | |
 
 **Settings flags (byte 14):**
@@ -108,6 +119,9 @@ Request packets: the app sends 20-byte zero-filled packets for most commands and
 | 4 | `0x10` | button changed filling chamber |
 | 5 | `0x20` | eco mode: charge voltage limit (~90 % cap) |
 | 6 | `0x40` | boost visualisation |
+| 7 | `0x80` | (unknown) always set on a Venty so far |
+
+Seen on a Venty in °F: `D3` at temperature and `D1` while heating up, so bits 4, 6 and 7 stayed set throughout.
 
 **Writes** use the same command. Byte 1 is a mask saying which fields to apply; everything else is ignored:
 
@@ -158,13 +172,19 @@ Notes:
 
 Response: byte 1 = application-firmware flags (`0x01` application running, `0x10` invalid application, `0x20` invalid bootloader); bytes 2–7 = firmware version, ASCII (e.g. `V01.11`); bytes 11–16 = bootloader version, ASCII (per reactive-volcano-app).
 
+Verified on a Venty: `02 01 56 30 31 2E 31 31 00 00 00 42 30 31 2E 31 31 00 00 00`, application running, firmware `V01.11`, bootloader `B01.11`.
+
 ### 5.3 `0x04` usage statistics
 
 Response: bytes 1–3 = heater runtime in minutes (u24 LE); bytes 4–6 = charging time in minutes (u24 LE).
 
+Verified on a Venty: these are **lifetime totals in minutes**. The heater count went up by one about every 60 s while heating (`B2 61 00` → `B7 61 00` over 5 minutes), and the example device read 25,014 min (417 h) heating and 16,108 min (268 h) charging. Bytes 7–19 were zero.
+
 ### 5.4 `0x05` identity
 
 Response: serial = ASCII bytes 15–16 (model prefix) followed by bytes 9–14. Byte 18 = colour index of the device: the official app reads it on the Veazy only (packet longer than 18 bytes) and maps 2 = blue, 3 = pink, 4 = orange, anything else = black. What a Venty sends here is **unverified**.
+
+A Venty sends 19 bytes: `05 00 00 00 00 00 00 00 00 38 48 36 4D 4A 43 56 59 0F FF`, giving serial `VY8H6MJC` (matching the device name). Bytes 1–8 are zero, byte 17 is `0x0F` (meaning unknown) and byte 18 is `0xFF`, so there is no colour.
 
 ### 5.5 `0x06` device settings
 
@@ -191,11 +211,22 @@ Vibration is on/off only: the official app (checked 2026-10-13) writes byte 5 as
 
 reactive-volcano-app notes this may not work on the Venty (**unverified**).
 
-Request: `0D 01` (20 bytes). The device vibrates / flashes. The `0x1D` response has bit 4 of byte 1 set while find-my is active.
+Request: `0D 01` (20 bytes). The device vibrates / flashes. The `0x1D` response has bit 4 of byte 1 set while find-my is active. The official app logs the `0x1D` reply as `t_advertisingInfo`. A Venty answers `1D 00 00` when find-my is off.
 
 ### 5.7 `0x03` / `0x23` analysis
 
 The device returns an error code (byte 1) and category (byte 2). The official app uploads a 512-byte analysis blob to Storz & Bickel for decoding on their servers. There is no local decoder; not planned for this app.
+
+No other read commands exist in the official app. Its remaining requests either change settings, run the analysis upload (`00 03` / `00 08`) or use the bootloader channel (`30 06`, connection-interval check before a firmware update). Do not send those just to read data.
+
+A Venty answers `0x23` with 13 bytes: `23 00 01 01 01 6F BD 4B 68 52 45 4C 45`. This reads as:
+- byte 1: 0;
+- byte 2: signing key ID 1 (the official app stores byte 2 of a `0x23` reply of 10+ bytes as `keyID_sign`; only `0x03` replies carry an error code and category);
+- bytes 3–4: unknown (`01 01`);
+- bytes 5–8: a u32 LE Unix time, `0x684BBD6F` = 2025-06-13 05:55:59 UTC, which is likely the firmware build time;
+- bytes 9–12: ASCII `RELE`, likely a cut-off `RELEASE` build tag.
+
+The meaning of the build time and tag is **unverified**.
 
 ## 6. Puff detection (derived, not a protocol field)
 

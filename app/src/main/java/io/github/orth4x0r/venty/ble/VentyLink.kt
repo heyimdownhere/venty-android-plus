@@ -15,6 +15,12 @@ interface VentyLink : AutoCloseable {
 
     /** Reads the link's signal strength in dBm, or null if the link can't. */
     suspend fun readRssi(): Int? = null
+
+    /**
+     * Describes every GATT service, characteristic and descriptor the device offers, with the value
+     * of each readable characteristic, one line each. Empty for links that can't.
+     */
+    suspend fun describeGatt(): List<String> = emptyList()
 }
 
 class LinkLostException(message: String) : Exception(message)

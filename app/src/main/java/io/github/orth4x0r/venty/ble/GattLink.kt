@@ -47,6 +47,7 @@ class GattLink private constructor() : VentyLink {
     @Volatile private var pendingOp: CompletableDeferred<Int>? = null
     @Volatile private var closed = false
     @Volatile private var lastRssi = 0
+    @Volatile private var lastRead: ByteArray? = null
 
     private val callback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(g: BluetoothGatt, status: Int, newState: Int) {
@@ -70,6 +71,21 @@ class GattLink private constructor() : VentyLink {
         }
 
         override fun onDescriptorWrite(g: BluetoothGatt, d: BluetoothGattDescriptor, status: Int) {
+            pendingOp?.complete(status)
+        }
+
+        // API 33+
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, value: ByteArray, status: Int) {
+            lastRead = value.copyOf()
+            pendingOp?.complete(status)
+        }
+
+        // API 32 and below
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicRead(g: BluetoothGatt, c: BluetoothGattCharacteristic, status: Int) {
+            if (Build.VERSION.SDK_INT >= 33) return
+            @Suppress("DEPRECATION")
+            lastRead = c.value?.copyOf()
             pendingOp?.complete(status)
         }
 
@@ -154,6 +170,42 @@ class GattLink private constructor() : VentyLink {
     override suspend fun readRssi(): Int {
         runOp("read RSSI") { gatt.readRemoteRssi() }
         return lastRssi
+    }
+
+    override suspend fun describeGatt(): List<String> {
+        val out = ArrayList<String>()
+        for (service in gatt.services) {
+            out += "service ${service.uuid} (${if (service.type == 0) "primary" else "secondary"})"
+            for (c in service.characteristics) {
+                out += "  char ${c.uuid} [${propertyNames(c.properties)}]"
+                c.descriptors.forEach { out += "    desc ${it.uuid}" }
+                if (c.properties and BluetoothGattCharacteristic.PROPERTY_READ == 0) continue
+                lastRead = null
+                val result = runCatching { runOp("read ${c.uuid}") { gatt.readCharacteristic(c) } }
+                val v = lastRead
+                out += if (result.isFailure) "    read failed: ${result.exceptionOrNull()?.message}"
+                else "    value ${v?.toHex() ?: "-"}" + (v?.printable()?.let { "  \"$it\"" } ?: "")
+            }
+        }
+        return out
+    }
+
+    private fun propertyNames(p: Int): String = listOf(
+        BluetoothGattCharacteristic.PROPERTY_BROADCAST to "broadcast",
+        BluetoothGattCharacteristic.PROPERTY_READ to "read",
+        BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE to "write-no-response",
+        BluetoothGattCharacteristic.PROPERTY_WRITE to "write",
+        BluetoothGattCharacteristic.PROPERTY_NOTIFY to "notify",
+        BluetoothGattCharacteristic.PROPERTY_INDICATE to "indicate",
+        BluetoothGattCharacteristic.PROPERTY_SIGNED_WRITE to "signed-write",
+        BluetoothGattCharacteristic.PROPERTY_EXTENDED_PROPS to "extended",
+    ).filter { p and it.first != 0 }.joinToString(" ") { it.second }
+
+    /** The value as text, if it is mostly printable ASCII. */
+    private fun ByteArray.printable(): String? {
+        if (isEmpty()) return null
+        val text = toString(Charsets.US_ASCII).trimEnd('\u0000')
+        return text.takeIf { t -> t.isNotEmpty() && t.all { it in ' '..'~' } }
     }
 
     /** BluetoothGatt.refresh() is hidden API but widely used to drop a stale service cache. */

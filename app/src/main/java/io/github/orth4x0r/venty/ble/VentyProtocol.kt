@@ -48,7 +48,7 @@ object VentyProtocol {
     const val MIN_TARGET = 400
     const val MAX_TARGET = 2100
 
-    private const val PACKET_SIZE = 20
+    const val PACKET_SIZE = 20
     private const val TEMP_NOT_AVAILABLE = 0x8000
 
     fun isVentyName(name: String?): Boolean = name?.contains(NAME_PREFIX) == true

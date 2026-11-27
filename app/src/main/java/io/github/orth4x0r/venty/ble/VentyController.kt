@@ -485,6 +485,7 @@ class VentyController(context: Context) {
             publish()
             return
         }
+        logReply(data)
         VentyProtocol.parseDeviceSettings(data)?.let { _deviceSettings.value = it; return }
         VentyProtocol.parseFirmware(data)?.let { fw -> _info.update { it.copy(firmware = fw) }; return }
         VentyProtocol.parseHeaterMinutes(data)?.let { m -> _info.update { it.copy(heaterMinutes = m) }; return }
@@ -562,6 +563,7 @@ class VentyController(context: Context) {
      * auto-off countdown are left out of the comparison, or every poll would be a new line.
      */
     private fun logStatusDiag(device: VentyStatus, shown: VentyStatus) {
+        logUnknownStatusBytes()
         val u = if (device.fahrenheit) "F" else "C"
         fun t(tenths: Int) = "%.1fC/%dF".format(tenths / 10.0, (tenths * 9 / 50.0 + 32).roundToInt())
         val dev = "dev mode=${device.heaterMode} reported=${t(device.reportedTargetTenths ?: device.targetTenths)} " +
@@ -583,6 +585,21 @@ class VentyController(context: Context) {
         if (key == lastDiagKey) return
         lastDiagKey = key
         DiagLog.log("$key | raw ${lastStatusRaw?.toHex() ?: "-"}")
+    }
+
+    /** Status bytes the protocol doc can't explain yet: 12, and 15 onwards. */
+    @Volatile private var lastUnknownStatusBytes: String? = null
+
+    private fun logUnknownStatusBytes() {
+        val raw = lastStatusRaw ?: return
+        val unknown = buildString {
+            if (raw.size > 12) append("b12=%02X".format(raw[12]))
+            for (i in 15 until raw.size) append(" b$i=%02X".format(raw[i]))
+            append(" len=${raw.size}")
+        }
+        if (unknown == lastUnknownStatusBytes) return
+        lastUnknownStatusBytes = unknown
+        DiagLog.log("status unknown bytes $unknown | raw ${raw.toHex()}")
     }
 
     private fun VentyStatus.flag(bit: Int) = when (bit) {
@@ -788,6 +805,47 @@ class VentyController(context: Context) {
 
     fun findMyDevice() = send(VentyProtocol.findMyDevice())
 
+    /** Raw replies other than status, logged once per distinct content (usage repeats every 15 s). */
+    private val loggedReplies = HashMap<Int, String>()
+
+    private fun logReply(data: ByteArray) {
+        val hex = data.toHex()
+        val cmd = data.firstOrNull()?.toInt()?.and(0xFF) ?: return
+        if (loggedReplies[cmd] == hex) return
+        loggedReplies[cmd] = hex
+        DiagLog.log("rx cmd %02X (%d bytes) %s".format(cmd, data.size, hex))
+    }
+
+    /**
+     * Logs everything the device will tell us: its GATT layout with every readable value, and the
+     * raw replies to each read command the official app uses (firmware, analysis, usage, identity,
+     * settings, find-my state). Only known read commands are sent; unknown command bytes could be
+     * factory or calibration functions.
+     */
+    fun probeDevice() {
+        val l = link ?: run { DiagLog.log("probe: not connected"); return }
+        scope.launch {
+            DiagLog.log("probe: start (${_kind.value.displayName}, firmware ${_info.value.firmware ?: "?"})")
+            try {
+                l.describeGatt().forEach { DiagLog.log("probe gatt $it") }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                DiagLog.log("probe gatt failed: ${e.message}")
+            }
+            loggedReplies.clear()
+            lastUnknownStatusBytes = null
+            for (cmd in PROBE_COMMANDS) {
+                val packet = if (cmd == VentyProtocol.CMD_DEVICE_SETTINGS) VentyProtocol.readDeviceSettings()
+                else ByteArray(VentyProtocol.PACKET_SIZE).also { it[0] = cmd }
+                DiagLog.log("probe tx ${packet.toHex()}")
+                sendSafely(packet)
+                delay(400)
+            }
+            delay(1_000)
+            DiagLog.log("probe: done")
+        }
+    }
+
     /** Signal strength of the current link in dBm, or null when there's no link or the read failed. */
     suspend fun readRssi(): Int? = try {
         link?.readRssi()
@@ -844,6 +902,9 @@ class VentyController(context: Context) {
         const val KEY_NAME = "name"
         const val KEY_KIND = "kind"
         const val KEY_IDLE_DISCONNECTED = "idle_disconnected"
+
+        /** Firmware, analysis (application), usage, identity, settings, find-my state. */
+        val PROBE_COMMANDS = byteArrayOf(0x02, 0x23, 0x04, 0x05, 0x06, 0x1D)
     }
 }
 

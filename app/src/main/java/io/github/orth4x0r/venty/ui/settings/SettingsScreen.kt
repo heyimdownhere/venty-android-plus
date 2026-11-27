@@ -64,6 +64,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.BatteryChargingFull
@@ -162,6 +163,7 @@ fun SettingsScreen(
     onVibration: (Boolean) -> Unit,
     onBoostTimeoutDisabled: (Boolean) -> Unit,
     onFindMy: () -> Unit,
+    onProbe: () -> Unit = {},
     onAppPrefs: (AppPrefs) -> Unit,
     onBack: () -> Unit,
     /** The saved device's address, for "connect when it turns on". */
@@ -457,6 +459,18 @@ fun SettingsScreen(
         SectionHeader("Diagnostics", Modifier.enterFromBelow(530))
         SettingsCard(Modifier.enterFromBelow(545)) {
             var cleared by remember { mutableStateOf(false) }
+            var probed by remember { mutableStateOf(false) }
+            ActionRow(
+                icon = Icons.Rounded.Search,
+                title = if (probed) "Probe sent, see the log" else "Probe device",
+                subtitle = "Log everything the device reports: its Bluetooth services and raw replies",
+                onClick = {
+                    onProbe()
+                    probed = true
+                    cleared = false
+                },
+            )
+            RowDivider()
             ActionRow(
                 icon = Icons.Rounded.Share,
                 title = "Share diagnostics log",

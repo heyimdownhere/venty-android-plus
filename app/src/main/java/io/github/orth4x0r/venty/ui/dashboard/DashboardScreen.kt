@@ -415,6 +415,7 @@ fun DashboardScreen(controller: VentyController, connection: ConnectionState) {
                             onVibration = controller::setVibration,
                             onBoostTimeoutDisabled = controller::setBoostTimeoutDisabled,
                             onFindMy = { openPage(Page.FindMy) },
+                            onProbe = controller::probeDevice,
                             deviceAddress = controller.lastDeviceAddress,
                             onPairingHold = controller::holdForPairing,
                             onPairingDone = controller::releasePairingHold,
